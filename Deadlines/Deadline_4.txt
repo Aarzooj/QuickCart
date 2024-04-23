@@ -1,0 +1,218 @@
+-- Deadline 4 --> SQL queries about our application Quickcart
+
+USE QuickCart;
+
+-- --------------------------------------------------------- ADMIN QUERIES ---------------------------------------------------------------
+-- 1. MANAGE PRODUCTS & INVENTORY
+
+-- 1.1 Change Product Category: Updates the products brand to NewBrand where product category belongs to Munchies
+UPDATE product p
+JOIN productCategory pc ON p.categoryID = pc.categoryID
+SET p.brand = 'NewBrand'
+WHERE pc.name = 'Munchies';
+
+-- 1.2 Low Stock Alert: Retrieves products with stock less than 10
+SELECT productID, name, stock
+FROM product
+WHERE stock < 10;
+
+-- 1.3 Adding Products to Inventory: Add more quantity of products for an existing product
+UPDATE product 
+SET stock = stock + 100 WHERE productID = 1;
+
+-- 1.4 INVENTORY UPDATE ON ORDER PLACED: This query updates the qty_bought and stock attribute in the product table according to 
+-- the orders placed by looking at the OrderConsistsProduct table for details
+UPDATE product
+SET qty_bought = qty_bought + COALESCE((
+    SELECT SUM(ocp.quantity)
+    FROM orderConsistsProduct ocp
+    WHERE ocp.productID = product.productID
+), 0),
+stock = stock - COALESCE((
+    SELECT SUM(ocp.quantity)
+    FROM orderConsistsProduct ocp
+    WHERE ocp.productID = product.productID
+ ), 0);
+
+SELECT * FROM product; -- to see the changes
+
+-- 2. ANALYTICS
+
+-- 2.1 (TOP CUSTOMERS) This query calculates the total amount spent by each customer and returns the customer ID, name, and total spent 
+-- amount for customers who have spent more than ₹500 on orders.
+SELECT c.customerID, CONCAT(c.first_name, COALESCE(CONCAT(' ', c.last_name), '')) AS name, SUM(o.total_price) AS total_spent
+FROM customer AS c
+LEFT JOIN `order` AS o ON c.customerID = o.customerID
+GROUP BY c.customerid
+HAVING SUM(o.total_price) > 500
+ORDER BY total_spent DESC;
+
+
+-- 2.2 (TOP AGENTS) This query displays the top 5 delivery agents based on their average rating received
+SELECT da.agentID, CONCAT(da.first_name, COALESCE(CONCAT(' ', da.last_name), '')) AS name, AVG(dr.rating) AS avg_rating
+FROM deliveryAgent da
+JOIN DeliveryReview dr ON da.agentID = dr.agentID
+GROUP BY da.agentID
+ORDER BY avg_rating DESC
+LIMIT 5;
+
+-- 2.3 PRODUCT PERFORMANCE ANALYTICS - 
+-- 2.3.1 (Sales Analytics) Most Revenue generating product
+SELECT p.productID, p.name, SUM(ocp.quantity) AS total_quantity, SUM(ocp.quantity)*p.price AS total_revenue
+FROM product p
+JOIN orderConsistsProduct ocp ON p.productID = ocp.productID
+GROUP BY p.productID
+ORDER BY total_revenue DESC;
+-- ORDER BY total_quantity DESC; -- this will give the most ordered product
+
+
+-- 2.3.2 This query retrieves the products ordered most frequently by displaying their product ID , product name along with 
+-- its order count.
+SELECT p.productID, p.name, COUNT(ocp.orderID) AS order_count
+FROM product p
+LEFT JOIN orderConsistsProduct ocp ON p.productID = ocp.productID
+GROUP BY p.productID
+ORDER BY order_count DESC
+LIMIT 5;
+
+
+-- 2.4 Average Order Cost per Delivery Agent: This query retrieves the average order cost of orders fulfilled by each delivery agent.
+SELECT da.agentID, CONCAT(da.first_name, COALESCE(CONCAT(' ', da.last_name), '')) AS name, SUM(o.total_price) / COUNT(o.orderID) AS average_order_cost
+FROM deliveryAgent da
+JOIN `order` o ON da.agentID = o.agentID
+GROUP BY da.agentID;
+
+-- 3. CONSUMER BEHAVIOUR
+
+-- 3.1 Monthly Order Report: This query retrieve the total number of orders done by each customer in September 2023
+SELECT c.customerID, CONCAT(c.first_name, COALESCE(CONCAT(' ', c.last_name), '')) AS name, COUNT(o.orderID) AS total_orders
+FROM customer c
+JOIN `order` o ON c.customerID = o.customerID
+WHERE o.time >= '2023-09-01' AND o.time < '2023-10-01'
+GROUP BY c.customerID
+ORDER BY total_orders DESC;
+
+
+-- 3.2 This query retrieves the names of the customers who never reviewed products 
+SELECT c.customerID, CONCAT(c.first_name, COALESCE(CONCAT(' ', c.last_name), '')) AS name
+FROM customer c
+LEFT JOIN ProductReview pr ON c.customerID = pr.customerID
+WHERE pr.productReviewID IS NULL;
+
+
+-- 3.3 Products Never Ordered: This query retrieves the productID and names for products that have not been ordered yet
+SELECT productID, name
+FROM product
+WHERE productID NOT IN (
+    SELECT productID
+    FROM orderConsistsProduct
+);
+-- this can also be done directly by qty_bought = 0 after executing "inventory update" query as it updates this attribute after 
+-- all the order placed
+SELECT productID, name
+FROM product 
+WHERE qty_bought = 0;
+
+
+-- 3.4 Recently Ordered Customers: This query retrieves the 5 people who most recently ordered
+SELECT c.customerID, CONCAT(c.first_name, COALESCE(CONCAT(' ', c.last_name), '')) AS name, o.orderID, o.time AS last_purchase_time
+FROM customer c
+JOIN `order` o ON c.customerID = o.customerID
+ORDER BY o.time DESC
+LIMIT 5;
+
+
+-- --------------------------------------------------------- CUSTOMER QUERIES ----------------------------------------------------------------
+
+-- 1. BROWSE
+-- 1.1 Search Product: Search products containing 'Milk' with available stock
+select productID,name, price, brand
+from product
+where name LIKE '%Milk%' and stock>0;
+
+
+-- 2. CART OPERATIONS 
+-- 2.1 Delete the products from the cart
+DELETE FROM addsToCart 
+WHERE customerID = 3;
+
+
+-- 2.2 Get total cart value
+SELECT c.customerID, SUM(p.price * c.quantity) AS total_cart_value
+FROM addsToCart c
+JOIN product p ON c.productID = p.productID
+WHERE c.customerID = 1;
+
+
+-- 3. UPDATE PERSONAL DETAILS: Update the address of a customer
+UPDATE customer
+SET address_street = "H1-101, IIIT Delhi",
+address_city = "New Delhi",
+address_state = "Delhi",
+pincode = 110020
+WHERE customerID = 15; 
+
+
+
+-- ---------------------------------------------------------- FUNCTIONAL QUERIES ----------------------------------------------------------------
+
+-- 1. Cancel order + Update Inventory if not shipped
+SELECT * FROM `order`;
+SELECT * FROM wallet;
+SELECT * FROM product;
+
+START TRANSACTION;
+
+UPDATE `order`
+SET status = 'Cancelled'
+WHERE orderID = 1 AND status = 'Confirmed';
+
+-- Refund money to customer wallet
+UPDATE wallet
+SET balance = balance + (SELECT total_price FROM `order` WHERE orderID = 1 AND status = 'Cancelled')
+WHERE customerID = (SELECT customerID FROM `order` WHERE orderID = 1 AND status = 'Cancelled');
+
+-- Update product inventory
+UPDATE product
+SET stock = stock + (SELECT quantity FROM orderConsistsProduct WHERE orderID = 1 AND productID = product.productID),
+qty_bought = qty_bought - (SELECT quantity FROM orderConsistsProduct WHERE orderID = 1 AND productID = product.productID)
+WHERE productID IN (SELECT productID FROM orderConsistsProduct WHERE orderID = 1);
+
+-- Delete that order from the OCP table i.e. remove the products from the Order as readded to the store's stock
+DELETE FROM orderConsistsProduct
+WHERE orderID = 1;
+
+-- Delete reviews associated with if any
+DELETE FROM deliveryReview WHERE orderID = 1;
+DELETE FROM productReview WHERE orderID = 1;
+
+COMMIT;
+
+SELECT * FROM `order`;
+SELECT * FROM wallet;
+SELECT * FROM Product;
+
+
+
+-- Showcasing Constraints (This queries will give error)
+
+-- 1. Unique constraint in Customer's email --> 
+UPDATE customer
+SET email = "ananya@quickcart.com" WHERE customerID = 40;
+-- This query will not run because customer with same email already exists in the database.
+
+-- 2. Balance >= 0 in Customer's waller -->
+UPDATE wallet
+SET balance = balance - 500 WHERE customerID = 5;
+-- This query will not run because check condition in the balance field is violated.
+
+-- 3. Quantity >= 1 in Store's inventory -->
+INSERT INTO storecontainsproduct (storeID, productID, quantity) VALUES
+(4, 1, -10);
+-- This query will not run because check condition in the quantity field is violated.
+
+-- 4. Adding a product category with no name -->
+INSERT INTO productCategory (categoryID, name, noOfProducts) VALUES
+(15, NULL, 40);
+-- This query will not run because the name column cannot be null, the category has to have a name.
+
